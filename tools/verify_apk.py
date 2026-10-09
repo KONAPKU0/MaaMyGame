@@ -40,7 +40,12 @@ def main():
     parser.add_argument("apk", type=Path)
     parser.add_argument("--assets", type=Path, default=ROOT / "build/android-pi")
     args = parser.parse_args()
-    verify(args.apk, args.assets)
+    try:
+        verify(args.apk, args.assets)
+    except Exception as error:
+        message = str(error).replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+        print(f'::error title=APK resource verification failed::{message}', flush=True)
+        raise
 
 
 if __name__ == "__main__":

@@ -28,7 +28,9 @@ def main():
     if output.exists():
         shutil.rmtree(output)
     output.mkdir(parents=True)
-    shutil.copytree(source / "resource", output / "resource", ignore=shutil.ignore_patterns("__pycache__"))
+    # Gradle Sync uses Ant's default excludes, including version-control files.
+    # Keep the staging tree identical to the files intended to ship in pi.zip.
+    shutil.copytree(source / "resource", output / "resource", ignore=shutil.ignore_patterns("__pycache__", ".gitignore", ".gitattributes", ".git"))
     shutil.copy2(ROOT / "LICENSE", output / "LICENSE")
     (output / "interface.json").write_text(json.dumps(interface, ensure_ascii=False, indent=4) + "\n", encoding="utf-8")
     print(f"Staged {len(interface['task'])} template tasks and OCR at {output}")
