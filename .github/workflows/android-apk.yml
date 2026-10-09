@@ -70,8 +70,11 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: '16111833'
+          packages: platform-tools
       - name: Install Android build prerequisites on the Actions runner
-        run: sdkmanager 'platforms;android-37' 'build-tools;36.0.0' 'cmake;3.22.1'
+        run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0' 'cmake;3.22.1'
       - uses: gradle/actions/setup-gradle@v4
       - name: Prepare MaaFramework Android arm64 libraries
         working-directory: vendor/MaaFwApp
@@ -80,7 +83,23 @@ jobs:
           printf 'build.debugAbi=arm64-v8a\n' > local.properties
       - name: Build installable debug APK
         working-directory: vendor/MaaFwApp
-        run: bash gradlew :app:assembleDebug --no-daemon --max-workers=2 --stacktrace
+        run: |
+          set +e
+          bash gradlew :app:assembleDebug --no-daemon --max-workers=2 --stacktrace > ../../build/gradle-debug.log 2>&1
+          build_status=$?
+          cat ../../build/gradle-debug.log
+          if [ "$build_status" -ne 0 ]; then
+            python - <<'PY'
+          from pathlib import Path
+          log = Path('../../build/gradle-debug.log').read_text(errors='replace')
+          lines = log.splitlines()
+          start = next((i for i, line in enumerate(lines) if 'What went wrong:' in line), max(0, len(lines) - 40))
+          message = '\n'.join(lines[start:start+45])[:9000]
+          message = message.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+          print(f'::error title=Android compilation failed::{message}')
+          PY
+          fi
+          exit "$build_status"
       - name: Verify embedded tasks, OCR and native libraries
         run: |
           python tools/verify_apk.py vendor/MaaFwApp/app/build/outputs/apk/debug/app-debug.apk
@@ -102,4 +121,5 @@ jobs:
           if-no-files-found: ignore
           path: |
             build/runtime-check/debug/**
+            build/gradle-debug.log
             vendor/MaaFwApp/app/build/reports/**
