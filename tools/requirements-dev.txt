@@ -1,0 +1,4 @@
+-r requirements.txt
+maafw==5.14.2
+jsonschema==4.26.0
+referencing==0.37.0

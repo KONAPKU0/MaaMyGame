@@ -1,0 +1,125 @@
+name: Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'assets/**'
+      - 'android/**'
+      - 'tools/**'
+      - 'vendor/MaaFwApp'
+      - '.gitmodules'
+      - 'package*.json'
+      - 'maatools.config.mts'
+      - '.github/workflows/android-apk.yml'
+  pull_request:
+    paths:
+      - 'assets/**'
+      - 'android/**'
+      - 'tools/**'
+      - 'vendor/MaaFwApp'
+      - '.gitmodules'
+      - 'package*.json'
+      - 'maatools.config.mts'
+      - '.github/workflows/android-apk.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PI_PROFILE: ${{ github.workspace }}/android/pi-profile.yaml
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: tools/requirements*.txt
+      - name: Install Pipeline development dependencies
+        run: |
+          npm ci --no-audit --no-fund
+          python -m pip install -r tools/requirements-dev.txt
+      - name: Validate and stage template resources
+        run: |
+          python tools/configure.py
+          npx --no-install @nekosu/maa-tools check
+          python tools/validate_schema.py --schema-dir deps/tools --resource-dirs assets/resource --exclude-dirs assets/resource/announcement --interface-files assets/interface.json
+          python tools/prepare_android.py
+          python tools/validate_schema.py --schema-dir deps/tools --resource-dirs build/android-pi/resource --interface-files build/android-pi/interface.json
+          python tools/check_runtime.py
+          python -m unittest discover -s tools -p 'test_verify_apk.py' -v
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: '16111833'
+          packages: platform-tools
+      - name: Install Android build prerequisites on the Actions runner
+        run: sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0' 'cmake;3.22.1'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Prepare MaaFramework Android arm64 libraries
+        working-directory: vendor/MaaFwApp
+        run: |
+          python scripts/setup_maa_framework.py --tag v5.14.2 --abi arm64-v8a
+          printf 'build.debugAbi=arm64-v8a\n' > local.properties
+      - name: Build installable debug APK
+        working-directory: vendor/MaaFwApp
+        run: |
+          set +e
+          bash gradlew :app:assembleDebug --no-daemon --max-workers=2 --stacktrace > ../../build/gradle-debug.log 2>&1
+          build_status=$?
+          cat ../../build/gradle-debug.log
+          if [ "$build_status" -ne 0 ]; then
+            python - <<'PY'
+          from pathlib import Path
+          log = Path('../../build/gradle-debug.log').read_text(errors='replace')
+          lines = log.splitlines()
+          start = next((i for i, line in enumerate(lines) if 'What went wrong:' in line), max(0, len(lines) - 40))
+          message = '\n'.join(lines[start:start+45])[:9000]
+          message = message.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+          print(f'::error title=Android compilation failed::{message}')
+          PY
+          fi
+          exit "$build_status"
+      - name: Verify embedded tasks, OCR and native libraries
+        run: |
+          python tools/verify_apk.py vendor/MaaFwApp/app/build/outputs/apk/debug/app-debug.apk
+          sdk_build_tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          "$sdk_build_tools/apksigner" verify --verbose vendor/MaaFwApp/app/build/outputs/apk/debug/app-debug.apk
+          sha256sum vendor/MaaFwApp/app/build/outputs/apk/debug/app-debug.apk > build/apk-sha256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MaaMyGame-arm64-debug-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            vendor/MaaFwApp/app/build/outputs/apk/debug/app-debug.apk
+            build/apk-sha256.txt
+      - name: Upload diagnostic logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build-diagnostics
+          if-no-files-found: ignore
+          path: |
+            build/runtime-check/debug/**
+            build/gradle-debug.log
+            vendor/MaaFwApp/app/build/reports/**

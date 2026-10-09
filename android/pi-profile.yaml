@@ -1,0 +1,9 @@
+# Relative paths resolve against this file, not the MaaFwApp checkout.
+assets: ../build/android-pi
+include:
+  - interface.json
+  - resource/**
+  - LICENSE
+app:
+  id: maamygame
+  label: MaaMyGame
